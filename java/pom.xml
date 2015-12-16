@@ -26,9 +26,10 @@
 		<module>org.cohorte.herald.rpc</module>
 		<module>org.cohorte.herald.shell</module>
 		<module>org.cohorte.herald.http</module>
+		<module>org.cohorte.herald.mqtt</module>
 		<module>org.cohorte.herald.xmpp</module>
 		<module>cohorte-herald-package</module>
-	</modules>
+  </modules>
 
 	<properties>
 		<pkg-version>0.0.2</pkg-version>
