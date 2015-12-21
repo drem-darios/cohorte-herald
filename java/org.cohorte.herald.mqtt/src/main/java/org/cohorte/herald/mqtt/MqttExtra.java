@@ -20,12 +20,12 @@ public class MqttExtra {
 	/** Sender MQTT port */
 	private final int pPort;
 
-	public MqttExtra(final String aHost, final int aPort,
-			final String aClientId, final String aTopic, final String aParentUid) {
+	public MqttExtra(final String aHost, final int aPort, final String aTopic,
+			final String aClientId, final String aParentUid) {
 		pHost = aHost;
 		pPort = aPort;
-		pClientId = aClientId;
 		pTopic = aTopic;
+		pClientId = aClientId;
 		pParentUid = aParentUid;
 	}
 

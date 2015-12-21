@@ -2,6 +2,7 @@ package org.cohorte.herald.mqtt.impl;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Map;
 
 import org.apache.felix.ipojo.annotations.Component;
 import org.apache.felix.ipojo.annotations.Instantiate;
@@ -14,18 +15,19 @@ import org.apache.felix.ipojo.annotations.ServiceProperty;
 import org.apache.felix.ipojo.annotations.Validate;
 import org.cohorte.herald.HeraldException;
 import org.cohorte.herald.IConstants;
+import org.cohorte.herald.IDirectory;
 import org.cohorte.herald.ITransport;
 import org.cohorte.herald.InvalidPeerAccess;
 import org.cohorte.herald.Message;
+import org.cohorte.herald.MessageReceived;
 import org.cohorte.herald.Peer;
 import org.cohorte.herald.Target;
-import org.cohorte.herald.core.utils.MessageUtils;
 import org.cohorte.herald.mqtt.IMqttConstants;
 import org.cohorte.herald.mqtt.MqttAccess;
 import org.cohorte.herald.mqtt.MqttExtra;
-import org.eclipse.paho.client.mqttv3.MqttClient;
+import org.cohorte.herald.transport.IContactHook;
+import org.cohorte.herald.transport.PeerContact;
 import org.eclipse.paho.client.mqttv3.MqttException;
-import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.jabsorb.ng.JSONSerializer;
 import org.jabsorb.ng.serializer.MarshallException;
 import org.osgi.service.log.LogService;
@@ -38,15 +40,18 @@ import org.osgi.service.log.LogService;
 @Component
 @Provides(specifications = ITransport.class)
 @Instantiate(name = "herald-mqtt-transport")
-public class MqttTransport implements ITransport {
+public class MqttTransport implements ITransport, IContactHook {
 
 	@ServiceProperty(name = IConstants.PROP_ACCESS_ID, value = IMqttConstants.ACCESS_ID)
 	private String pAccessId;
 
-    /** The transport service controller */
-    @ServiceController
-    private boolean pController;
+	/** The transport service controller */
+	@ServiceController
+	private boolean pController;
 
+    /** The peer contact handler */
+    private PeerContact pContact;
+    
 	/** MQTT server host */
 	@Property(name = "mqtt.server", value = "localhost")
 	private String pHost;
@@ -54,13 +59,19 @@ public class MqttTransport implements ITransport {
 	/** MQTT server port */
 	@Property(name = "mqtt.port", value = "1883")
 	private int pPort;
+
+	/** MQTT username */
+	@Property(name = "mqtt.username")
+	private String pUsername;
 	
-	/** MQTT clientId */
-	@Property(name = "mqtt.clientId")
-	private String pClientId;
+	/** MQTT password */
+	@Property(name = "mqtt.password")
+	private String pPassword;
 	
-	/** The MQTT client */
-	private MqttClient pClient;
+	/** The MQTT messanger client */
+	private MqttMessenger pMessenger;
+	
+	private Peer pPeer;
 	
 	/** The log service */
 	@Requires
@@ -68,6 +79,10 @@ public class MqttTransport implements ITransport {
 
 	/** The Jabsorb serializer */
 	private JSONSerializer pSerializer;
+	
+	/** Herald core directory */
+	@Requires
+	private IDirectory pDirectory;
 
 	@Override
 	public void fire(Peer aPeer, Message aMessage) throws HeraldException {
@@ -77,6 +92,11 @@ public class MqttTransport implements ITransport {
 	@Override
 	public void fire(Peer aPeer, Message aMessage, Object aExtra)
 			throws HeraldException {
+		fire(aPeer, aMessage, aExtra, false);
+	}
+
+	private void fire(Peer aPeer, Message aMessage, Object aExtra,
+			Boolean isGroup) throws HeraldException, InvalidPeerAccess {
 
 		// Get message extra information, if any
 		final MqttExtra extra;
@@ -86,18 +106,16 @@ public class MqttTransport implements ITransport {
 			extra = null;
 		}
 		
-		String url = getBrokerUrl(aPeer, extra); 
-		String clientId = getClientId(aPeer, extra);
-		String topic = getTopic(aPeer, extra);
-
+		// TODO: Add logging before sending message
 		try {
-			sendMessage(aPeer, url, clientId, topic, aMessage);	
+			String topic = getTopic(aPeer, extra);
+			pMessenger.fire(topic, aMessage);
+
 		} catch (MqttException | MarshallException ex) {
 			throw new HeraldException(new Target(aPeer),
 					"Error converting the content of the message to JSON: "
 							+ ex, ex);
 		}
-		
 	}
 
 	@Override
@@ -107,35 +125,37 @@ public class MqttTransport implements ITransport {
 		for (Peer aPeer : aPeers) {
 			if (aPeer.getGroups().contains(aGroup)) {
 				reachedPeers.add(aPeer);
-				fire(aPeer, aMessage);
+				fire(aPeer, aMessage, null, true);
 			}
 		}
-		
+
 		return reachedPeers;
 	}
-	
+
 	/**
 	 * Component invalidated
+	 * @throws MqttException 
 	 */
 	@Invalidate
 	public void invalidate() {
 		try {
-			pClient.disconnect();
-		} catch (MqttException ex) {
+			pMessenger.disconnect();
+		} catch (final Exception ex) {
 			pLogger.log(LogService.LOG_ERROR,
-                    "Error disconnecting from the MQTT server: " + ex, ex);
+					"Error disconnecting from MQTT server: " + ex, ex);
 		}
-		pClient = null;
+		pPeer.unsetAccess(pAccessId);
+		pPeer = null;
 		// Clean up members
 		pSerializer = null;
+		pController = false;
 	}
-	
+
 	/**
 	 * Component validated
 	 */
 	@Validate
 	public void validate() {
-
 		// Prepare the JSON serializer
 		pSerializer = new JSONSerializer();
 		try {
@@ -148,38 +168,50 @@ public class MqttTransport implements ITransport {
 			return;
 		}
 		
-		if (pClientId == null || pClientId.isEmpty()) {
-			pClientId = MqttClient.generateClientId();
+		this.pPeer = this.pDirectory.getLocalPeer();
+		this.pMessenger = new MqttMessenger(pPeer);
+//		this.pMessenger.setCallbackHandler(this);
+		if (this.pUsername != null && !this.pUsername.isEmpty()) {
+			this.pMessenger.login(pUsername, pPassword);
 		}
 		
 		try {
-			pClient = new MqttClient(toUrl(pHost, pPort), pClientId);
-			pClient.connect();
-        } catch (final MqttException ex) {
-            pLogger.log(LogService.LOG_ERROR,
-                    "Error connecting to the MQTT server: " + ex, ex);
-        }
-
+			this.pMessenger.connect(pHost, pPort);
+		} catch (MqttException ex) {
+			pLogger.log(LogService.LOG_ERROR,
+					"Error setting MQTT messanger: " + ex, ex);
+			pController = false;
+			return;
+		}
+		
+		
+		this.pContact = new PeerContact(pDirectory, this, pLogger);
+		
 		// Everything is OK
 		pController = true;
 	}
-	
 
-	private void sendMessage(Peer aPeer, String serverUrl, String clientId,
-			String topic, Message aMessage) throws MqttException, MarshallException {
-		try {
-			MqttMessage message = new MqttMessage();
-			String content = MessageUtils.toJSON(aMessage);
-			
-			message.setPayload(content.getBytes());
-			pClient.publish(topic, message);
-		} catch (MarshallException ex) {
-			throw ex;
-		}
+	@Override
+	public Map<String, Object> updateDescription(MessageReceived aMessage,
+			Map<String, Object> aDescription) {
+		if (aMessage.getAccess().equals(pAccessId)) {
+            // Forge the access to the HTTP server using extra information
+            final MqttExtra extra = (MqttExtra) aMessage.getExtra();
+            final MqttAccess updatedAccess = new MqttAccess(extra.getHost(),
+                    extra.getPort(), this.pPeer.getUid(), null);
+
+            // Update the remote peer description with its MQTT access
+            @SuppressWarnings("unchecked")
+            final Map<String, Object> accessDump = (Map<String, Object>) aDescription
+                    .get("accesses");
+            accessDump.put(pAccessId, updatedAccess.dump());
+        }
+
+        return aDescription;
 	}
 
-	
-	private String getTopic(Peer aPeer, MqttExtra aExtra) throws InvalidPeerAccess {
+	private String getTopic(Peer aPeer, MqttExtra aExtra)
+			throws InvalidPeerAccess {
 		String topic = null;
 		if (aExtra != null) {
 			// Try to use extra information
@@ -188,81 +220,18 @@ public class MqttTransport implements ITransport {
 
 		if (aPeer != null && (topic == null || topic.isEmpty())) {
 			// Use the peer description, if any
-			final MqttAccess peerAccess = (MqttAccess) aPeer.getAccess(pAccessId);
+			final MqttAccess peerAccess = (MqttAccess) aPeer
+					.getAccess(pAccessId);
 			topic = peerAccess.getTopic();
 		}
-		
+
 		// If we have nothing at this point, we can't compute an access
 		if (topic == null || topic.isEmpty()) {
-			throw new InvalidPeerAccess(new Target(aPeer), "No " + pAccessId + " access found");
+			throw new InvalidPeerAccess(new Target(aPeer), "No " + pAccessId
+					+ " access found");
 		}
 		
 		return topic;
+
 	}
-
-	private String getClientId(Peer aPeer, MqttExtra aExtra) {
-		String clientId = null;
-		if (aExtra != null) {
-			// Try to use extra information
-			clientId = aExtra.getClientId();
-		}
-
-		if (aPeer != null && (clientId == null || clientId.isEmpty())) {
-			// Use the peer description, if any
-			final MqttAccess peerAccess = (MqttAccess) aPeer.getAccess(pAccessId);
-			clientId = peerAccess.getClientId();
-		}
-
-		// If we have nothing at this point, generate a random client id
-		if (clientId == null || clientId.isEmpty()) {
-			clientId = MqttClient.generateClientId();
-		}
-		
-		return clientId;
-	}
-
-	private String getBrokerUrl(Peer aPeer, MqttExtra aExtra) throws InvalidPeerAccess {
-		String host = null;
-		int port = 0;
-
-		if (aExtra != null) {
-			// Try to use extra information
-			host = aExtra.getHost();
-			port = aExtra.getPort();
-		}
-
-		if (aPeer != null && (host == null || host.isEmpty())) {
-			// Use the peer description, if any
-			final MqttAccess peerAccess = (MqttAccess) aPeer.getAccess(pAccessId);
-			host = peerAccess.getHost();
-			port = peerAccess.getPort();
-		}
-
-		// If we have nothing at this point, we can't compute an access
-		if (host == null || host.isEmpty()) {
-			throw new InvalidPeerAccess(new Target(aPeer), "No " + pAccessId + " access found");
-		}
-
-		// No port given, remove it from the URL
-		if (port == 0) {
-			port = -1;
-		}
-		
-		return toUrl(host, port);
-	}
-
-	private String toUrl(String host, int port) {
-		// FIXME: Handle SSL connection
-		StringBuilder builder = new StringBuilder("tcp://");
-
-		// Craft the URL
-		builder.append(host);
-		if (port > 0) {
-			builder.append(':');
-			builder.append(port);	
-		}
-		
-		return builder.toString();
-	}
-
 }

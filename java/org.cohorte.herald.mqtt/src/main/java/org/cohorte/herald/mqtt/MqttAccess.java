@@ -16,13 +16,19 @@ public class MqttAccess extends Access {
 	 */
 	public static MqttAccess load(final Object aDump) {
 
-		if (aDump instanceof Object[] && ((Object[]) aDump).length == 3) {
+		if (aDump instanceof Object[] && ((Object[]) aDump).length >= 2) {
 
 			final Object[] dump = (Object[]) aDump;
 			final String host = (String) dump[0];
 			final Object rawPort = dump[1];
-			final String clientId = (String) dump[2];
-			final String topic = (String) dump[3];
+			final String topic = (String) dump[2];
+			final String clientId;
+			if (((Object[]) aDump).length == 3) {
+				clientId = (String) dump[3];	
+			} else {
+				clientId = null;
+			}
+			
 
 			// Convert the port to an integer
 			final int port;
@@ -32,7 +38,7 @@ public class MqttAccess extends Access {
 				port = Integer.valueOf((String) rawPort);
 			}
 
-			return new MqttAccess(host, port, clientId, topic);
+			return new MqttAccess(host, port, topic, clientId);
 		}
 
 		// Unreadable content
@@ -58,17 +64,17 @@ public class MqttAccess extends Access {
 	 *            MQTT server host
 	 * @param aPort
 	 *            MQTT server port
-	 * @param aClientId
-	 *            Client Id of the MQTT broker
 	 * @param aTopic
 	 *            Topic to communicate on
+	 * @param aClientId
+	 *            Client Id of the MQTT broker
 	 */
 	public MqttAccess(final String aHost, final int aPort,
-			final String aClientId, final String aTopic) {
+			final String aTopic, final String aClientId) {
 		pHost = aHost;
 		pPort = aPort;
-		pClientId = aClientId;
 		pTopic = aTopic;
+		pClientId = aClientId;
 	}
 
 	/*
