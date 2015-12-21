@@ -1,6 +1,10 @@
 Herald
 ######
 
+.. image:: https://badges.gitter.im/drem-darios/cohorte-herald.svg
+   :alt: Join the chat at https://gitter.im/drem-darios/cohorte-herald
+   :target: https://gitter.im/drem-darios/cohorte-herald?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge
+
 Herald is an easy-to-use messaging framework.
 It allows Pelix/iPOPO and Java OSGi frameworks to communicate with each other
 using messages, without worrying about the underlying protocol used for
