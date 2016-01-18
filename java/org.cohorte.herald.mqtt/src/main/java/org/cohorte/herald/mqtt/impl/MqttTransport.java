@@ -23,6 +23,7 @@ import org.cohorte.herald.MessageReceived;
 import org.cohorte.herald.Peer;
 import org.cohorte.herald.Target;
 import org.cohorte.herald.mqtt.IMqttConstants;
+import org.cohorte.herald.mqtt.IMqttListener;
 import org.cohorte.herald.mqtt.MqttAccess;
 import org.cohorte.herald.mqtt.MqttExtra;
 import org.cohorte.herald.transport.IContactHook;
@@ -40,7 +41,7 @@ import org.osgi.service.log.LogService;
 @Component
 @Provides(specifications = ITransport.class)
 @Instantiate(name = "herald-mqtt-transport")
-public class MqttTransport implements ITransport, IContactHook {
+public class MqttTransport implements ITransport, IMqttListener, IContactHook {
 
 	@ServiceProperty(name = IConstants.PROP_ACCESS_ID, value = IMqttConstants.ACCESS_ID)
 	private String pAccessId;
@@ -109,8 +110,14 @@ public class MqttTransport implements ITransport, IContactHook {
 		// TODO: Add logging before sending message
 		try {
 			String topic = getTopic(aPeer, extra);
-			pMessenger.fire(topic, aMessage);
-
+			if (isGroup) {
+				pMessenger.subscribeToGroup(topic, this);
+				pMessenger.fireGroup(topic, aMessage);
+			} else {
+				pMessenger.subscribeToUid(topic, this);
+				pMessenger.fire(topic, aMessage);
+			}
+			
 		} catch (MqttException | MarshallException ex) {
 			throw new HeraldException(new Target(aPeer),
 					"Error converting the content of the message to JSON: "
@@ -170,13 +177,13 @@ public class MqttTransport implements ITransport, IContactHook {
 		
 		this.pPeer = this.pDirectory.getLocalPeer();
 		this.pMessenger = new MqttMessenger(pPeer);
-//		this.pMessenger.setCallbackHandler(this);
 		if (this.pUsername != null && !this.pUsername.isEmpty()) {
 			this.pMessenger.login(pUsername, pPassword);
 		}
 		
 		try {
 			this.pMessenger.connect(pHost, pPort);
+			this.pMessenger.subscribeToWill(this);
 		} catch (MqttException ex) {
 			pLogger.log(LogService.LOG_ERROR,
 					"Error setting MQTT messanger: " + ex, ex);
@@ -234,4 +241,10 @@ public class MqttTransport implements ITransport, IContactHook {
 		return topic;
 
 	}
+
+	@Override
+	public void onMessage(Message aMessage) {
+		
+	}
+
 }
